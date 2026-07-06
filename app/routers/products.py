@@ -15,6 +15,16 @@ router = APIRouter(
     tags=["Products"]
 )
 
+@router.get("/", response_model=list[ProductResponse])
+def get_products(db: Session = Depends(get_db)):
+    products = db.query(Product).filter(Product.is_active == True).all()
+    return products
+
+
+@router.get("/admin/all", response_model=list[ProductResponse])
+def get_all_products(db: Session = Depends(get_db)):
+    products = db.query(Product).order_by(Product.id.desc()).all()
+    return products
 
 def upload_image_to_cloudinary(image: UploadFile):
     if not image.content_type or not image.content_type.startswith("image/"):
