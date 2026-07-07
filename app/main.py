@@ -22,7 +22,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "https://uniqare.vercel.app/",
+        "https://uniqare.vercel.app",
         "https://uniqare-git-main-dn13.vercel.app",
         "https://uniqare-qdos2dmbw-dn13.vercel.app",
     ],
