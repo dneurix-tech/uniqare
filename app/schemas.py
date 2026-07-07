@@ -53,6 +53,27 @@ class CouponResponse(CouponCreate):
     class Config:
         from_attributes = True
 
+class OrderPaymentUpdate(BaseModel):
+    payment_method: str
+    payment_status: str
+    payment_details: Optional[str] = None
+
+
+class OrderItemCreate(BaseModel):
+    product_id: int
+    quantity: int = 1
+
+
+class OrderItemResponse(BaseModel):
+    id: int
+    product_id: int
+    quantity: int
+    unit_price: float
+    total_price: float
+
+    class Config:
+        from_attributes = True
+
 
 class OrderCreate(BaseModel):
     customer_name: str
@@ -61,9 +82,13 @@ class OrderCreate(BaseModel):
     governorate: str
     address: str
     note: Optional[str] = None
-    product_id: int
-    quantity: int = 1
     coupon_code: Optional[str] = None
+
+    # New multi-product order
+    items: list[OrderItemCreate]
+
+    # Old fields - مش هنستخدمهم في الأوردر الجديد
+    # بس مش هنحطهم هنا عشان نجبر الفرونت يبعت items
 
 
 class OrderResponse(BaseModel):
@@ -74,7 +99,9 @@ class OrderResponse(BaseModel):
     governorate: str
     address: str
     note: Optional[str] = None
-    product_id: int
+
+    # Old compatibility fields
+    product_id: Optional[int] = None
     quantity: int
 
     subtotal_price: float
@@ -82,21 +109,34 @@ class OrderResponse(BaseModel):
     discount_amount: float
     total_price: float
 
+    payment_method: Optional[str] = None
+    payment_status: Optional[str] = None
+    payment_details: Optional[str] = None
+
     status: str
     created_at: datetime
+
+    # New order items
+    items: list[OrderItemResponse] = []
 
     class Config:
         from_attributes = True
 
 
-class CheckCouponRequest(BaseModel):
+class CheckCouponItem(BaseModel):
     product_id: int
     quantity: int = 1
+
+
+class CheckCouponRequest(BaseModel):
     coupon_code: str
+
+    # New multi-products coupon check
+    items: list[CheckCouponItem]
 
 
 class CheckCouponResponse(BaseModel):
-    coupon_code: str
+    coupon_code: Optional[str] = None
     subtotal_price: float
     discount_amount: float
     total_price: float

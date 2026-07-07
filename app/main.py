@@ -3,7 +3,9 @@ from fastapi import FastAPI
 from app.database import engine, Base
 from app.routers import products, orders, coupons
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
+load_dotenv()
 
 Base.metadata.create_all(bind=engine)
 
