@@ -22,6 +22,8 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "uniqare-git-main-dn13.vercel.app",
+        "uniqare-qdos2dmbw-dn13.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
