@@ -61,7 +61,8 @@ def upload_image_to_cloudinary(image: UploadFile):
 @router.post("/", response_model=ProductResponse)
 def create_product(
     name: str = Form(...),
-    description: Optional[str] = Form(None),
+    short_description: Optional[str] = Form(None),
+    long_description: Optional[str] = Form(None),
     price: float = Form(...),
     category: Optional[str] = Form(None),
     stock: int = Form(0),
@@ -80,7 +81,8 @@ def create_product(
 
     new_product = Product(
         name=name,
-        description=description,
+        short_description=short_description,
+        long_description=long_description,
         price=price,
         image_url=image_url,
         category=category,
@@ -115,7 +117,8 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 def update_product(
     product_id: int,
     name: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
+    short_description: Optional[str] = Form(None),
+    long_description: Optional[str] = Form(None),
     price: Optional[float] = Form(None),
     category: Optional[str] = Form(None),
     stock: Optional[int] = Form(None),
@@ -131,8 +134,11 @@ def update_product(
     if name is not None:
         product.name = name
 
-    if description is not None:
-        product.description = description
+    if short_description is not None:
+        product.short_description = short_description
+
+    if long_description is not None:
+        product.long_description = long_description
 
     if price is not None:
         product.price = price
