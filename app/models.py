@@ -49,11 +49,18 @@ class Order(Base):
     address = Column(Text, nullable=False)
     note = Column(Text, nullable=True)
 
+    # Legacy single-product compatibility fields.
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
     quantity = Column(Integer, default=1)
 
     subtotal_price = Column(Float, nullable=False, default=0)
     coupon_code = Column(String(50), nullable=True)
+
+    # Coupon snapshot: old orders keep their original discount even if the
+    # administrator later edits or deletes the coupon.
+    coupon_discount_type = Column(String(20), nullable=True)
+    coupon_discount_value = Column(Float, nullable=True)
+
     discount_amount = Column(Float, nullable=False, default=0)
     total_price = Column(Float, nullable=False)
 
@@ -65,7 +72,11 @@ class Order(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     product = relationship("Product", back_populates="orders")
-    items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+    items = relationship(
+        "OrderItem",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
 
 
 class OrderItem(Base):
@@ -80,3 +91,15 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product", back_populates="order_items")
+
+
+class Review(Base):
+    __tablename__ = "reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_name = Column(String(150), nullable=True)
+    description = Column(Text, nullable=True)
+    image_url = Column(String(500), nullable=True)
+    rating = Column(Integer, default=5)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

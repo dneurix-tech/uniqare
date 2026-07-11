@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProductBase(BaseModel):
@@ -39,11 +39,21 @@ class ProductResponse(ProductBase):
 
 class CouponCreate(BaseModel):
     code: str
-    discount_type: str
+    discount_type: str = "percent"
     discount_value: float
     min_order_amount: float = 0
     usage_limit: Optional[int] = None
     is_active: bool = True
+    expires_at: Optional[datetime] = None
+
+
+class CouponUpdate(BaseModel):
+    code: Optional[str] = None
+    discount_type: Optional[str] = None
+    discount_value: Optional[float] = None
+    min_order_amount: Optional[float] = None
+    usage_limit: Optional[int] = None
+    is_active: Optional[bool] = None
     expires_at: Optional[datetime] = None
 
 
@@ -54,6 +64,7 @@ class CouponResponse(CouponCreate):
 
     class Config:
         from_attributes = True
+
 
 class OrderPaymentUpdate(BaseModel):
     payment_method: str
@@ -69,6 +80,8 @@ class OrderItemCreate(BaseModel):
 class OrderItemResponse(BaseModel):
     id: int
     product_id: int
+    product_name: Optional[str] = None
+    product_image: Optional[str] = None
     quantity: int
     unit_price: float
     total_price: float
@@ -85,12 +98,7 @@ class OrderCreate(BaseModel):
     address: str
     note: Optional[str] = None
     coupon_code: Optional[str] = None
-
-    # New multi-product order
     items: list[OrderItemCreate]
-
-    # Old fields - مش هنستخدمهم في الأوردر الجديد
-    # بس مش هنحطهم هنا عشان نجبر الفرونت يبعت items
 
 
 class OrderResponse(BaseModel):
@@ -102,12 +110,13 @@ class OrderResponse(BaseModel):
     address: str
     note: Optional[str] = None
 
-    # Old compatibility fields
     product_id: Optional[int] = None
     quantity: int
 
     subtotal_price: float
     coupon_code: Optional[str] = None
+    coupon_discount_type: Optional[str] = None
+    coupon_discount_value: Optional[float] = None
     discount_amount: float
     total_price: float
 
@@ -118,8 +127,7 @@ class OrderResponse(BaseModel):
     status: str
     created_at: datetime
 
-    # New order items
-    items: list[OrderItemResponse] = []
+    items: list[OrderItemResponse] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -132,8 +140,6 @@ class CheckCouponItem(BaseModel):
 
 class CheckCouponRequest(BaseModel):
     coupon_code: str
-
-    # New multi-products coupon check
     items: list[CheckCouponItem]
 
 
@@ -143,3 +149,21 @@ class CheckCouponResponse(BaseModel):
     discount_amount: float
     total_price: float
     message: str
+
+
+class OrderAdminUpdate(BaseModel):
+    customer_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    governorate: Optional[str] = None
+    address: Optional[str] = None
+    note: Optional[str] = None
+
+    status: Optional[str] = None
+
+    payment_method: Optional[str] = None
+    payment_status: Optional[str] = None
+    payment_details: Optional[str] = None
+
+    # When supplied, this list fully replaces the order's current products.
+    items: Optional[list[OrderItemCreate]] = None
