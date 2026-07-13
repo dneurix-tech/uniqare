@@ -15,7 +15,12 @@ if DATABASE_URL.startswith("sqlite"):
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+)
+
 Base = declarative_base()
 
 # Register all models before create_all.
@@ -31,11 +36,22 @@ def add_column_if_missing(
 ):
     if column_name not in existing_columns:
         conn.execute(
-            text(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+            text(
+                f"ALTER TABLE {table_name} "
+                f"ADD COLUMN {column_sql}"
+            )
         )
 
 
 def ensure_schema_compatibility():
+    """
+    Creates missing tables and safely adds newer columns to
+    existing SQLite or PostgreSQL databases.
+
+    This function runs when the application starts, so old_price
+    will be added automatically without running a manual SQL command.
+    """
+
     Base.metadata.create_all(bind=engine)
 
     inspector = inspect(engine)
@@ -55,6 +71,7 @@ def ensure_schema_compatibility():
                 "short_description",
                 "short_description TEXT",
             )
+
             add_column_if_missing(
                 conn,
                 "products",
@@ -62,6 +79,15 @@ def ensure_schema_compatibility():
                 "long_description",
                 "long_description TEXT",
             )
+
+            add_column_if_missing(
+                conn,
+                "products",
+                existing_columns,
+                "old_price",
+                "old_price FLOAT",
+            )
+
             add_column_if_missing(
                 conn,
                 "products",
@@ -69,6 +95,7 @@ def ensure_schema_compatibility():
                 "category",
                 "category VARCHAR(100)",
             )
+
             add_column_if_missing(
                 conn,
                 "products",
@@ -76,6 +103,7 @@ def ensure_schema_compatibility():
                 "stock",
                 "stock INTEGER DEFAULT 0",
             )
+
             add_column_if_missing(
                 conn,
                 "products",
@@ -97,6 +125,7 @@ def ensure_schema_compatibility():
                 "subtotal_price",
                 "subtotal_price FLOAT DEFAULT 0",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -104,6 +133,7 @@ def ensure_schema_compatibility():
                 "coupon_code",
                 "coupon_code VARCHAR(50)",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -111,6 +141,7 @@ def ensure_schema_compatibility():
                 "coupon_discount_type",
                 "coupon_discount_type VARCHAR(20)",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -118,6 +149,7 @@ def ensure_schema_compatibility():
                 "coupon_discount_value",
                 "coupon_discount_value FLOAT",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -125,6 +157,7 @@ def ensure_schema_compatibility():
                 "discount_amount",
                 "discount_amount FLOAT DEFAULT 0",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -132,6 +165,7 @@ def ensure_schema_compatibility():
                 "payment_method",
                 "payment_method VARCHAR(100)",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -139,6 +173,7 @@ def ensure_schema_compatibility():
                 "payment_status",
                 "payment_status VARCHAR(150)",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -146,6 +181,7 @@ def ensure_schema_compatibility():
                 "payment_details",
                 "payment_details TEXT",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -153,6 +189,7 @@ def ensure_schema_compatibility():
                 "status",
                 "status VARCHAR(50) DEFAULT 'pending'",
             )
+
             add_column_if_missing(
                 conn,
                 "orders",
@@ -186,9 +223,11 @@ def ensure_schema_compatibility():
                         o.product_id,
                         COALESCE(o.quantity, 1),
                         COALESCE(p.price, 0),
-                        COALESCE(p.price, 0) * COALESCE(o.quantity, 1)
+                        COALESCE(p.price, 0)
+                            * COALESCE(o.quantity, 1)
                     FROM orders o
-                    JOIN products p ON p.id = o.product_id
+                    JOIN products p
+                        ON p.id = o.product_id
                     WHERE o.product_id IS NOT NULL
                     AND NOT EXISTS (
                         SELECT 1

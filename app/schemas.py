@@ -8,7 +8,13 @@ class ProductBase(BaseModel):
     name: str
     short_description: Optional[str] = None
     long_description: Optional[str] = None
+
+    # Current selling price.
     price: float
+
+    # Optional previous price displayed with a line through it.
+    old_price: Optional[float] = None
+
     image_url: Optional[str] = None
     category: Optional[str] = None
     stock: int = 0
@@ -24,6 +30,7 @@ class ProductUpdate(BaseModel):
     short_description: Optional[str] = None
     long_description: Optional[str] = None
     price: Optional[float] = None
+    old_price: Optional[float] = None
     image_url: Optional[str] = None
     category: Optional[str] = None
     stock: Optional[int] = None
@@ -127,7 +134,9 @@ class OrderResponse(BaseModel):
     status: str
     created_at: datetime
 
-    items: list[OrderItemResponse] = Field(default_factory=list)
+    items: list[OrderItemResponse] = Field(
+        default_factory=list,
+    )
 
     class Config:
         from_attributes = True
@@ -165,5 +174,6 @@ class OrderAdminUpdate(BaseModel):
     payment_status: Optional[str] = None
     payment_details: Optional[str] = None
 
-    # When supplied, this list fully replaces the order's current products.
+    # When supplied, this list fully replaces
+    # the current products in the order.
     items: Optional[list[OrderItemCreate]] = None
