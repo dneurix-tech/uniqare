@@ -1,7 +1,14 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+)
 from sqlalchemy.orm import Session, joinedload
+
+from app.services.email_service import send_order_emails
 
 from app.database import get_db
 from app.models import Coupon, Order, OrderItem, Product
@@ -56,6 +63,28 @@ def order_to_dict(order: Order):
             for item in order.items
         ],
     }
+
+
+def create_order_email_snapshot(order_data: dict):
+    """
+    تجهيز نسخة مستقلة من بيانات الطلب لإرسالها إلى
+    Background Task بدون تمرير SQLAlchemy objects.
+    """
+    email_snapshot = {
+        **order_data,
+        "items": [
+            dict(item)
+            for item in order_data.get("items", [])
+        ],
+    }
+
+    # email_service يستخدم customer_email، بينما اسم الحقل
+    # داخل موديل الطلب هو email. نرسل المفتاحين للتوافق.
+    email_snapshot["customer_email"] = (
+        order_data.get("email") or ""
+    )
+
+    return email_snapshot
 
 
 def get_order_with_items(db: Session, order_id: int):
@@ -613,6 +642,7 @@ def check_coupon(
 @router.post("/")
 def create_order(
     order: OrderCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     quantities = merge_item_quantities(
@@ -764,7 +794,30 @@ def create_order(
             order_id=new_order.id,
         )
 
-        return order_to_dict(saved_order)
+        if not saved_order:
+            # لا نرجع فشلًا بعد أن تم حفظ الطلب بالفعل.
+            # نستخدم الكائن الموجود في الـSession كحل احتياطي.
+            db.refresh(new_order)
+            saved_order = new_order
+
+        saved_order_data = order_to_dict(
+            saved_order
+        )
+
+        email_snapshot = (
+            create_order_email_snapshot(
+                saved_order_data
+            )
+        )
+
+        # يتم إرسال الإيميلات بعد إعادة الاستجابة للعميل.
+        # فشل Brevo لن يلغي الطلب بعد حفظه في قاعدة البيانات.
+        background_tasks.add_task(
+            send_order_emails,
+            email_snapshot,
+        )
+
+        return saved_order_data
 
     except HTTPException:
         db.rollback()

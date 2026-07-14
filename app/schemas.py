@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 
 
 class ProductBase(BaseModel):
@@ -100,7 +100,7 @@ class OrderItemResponse(BaseModel):
 class OrderCreate(BaseModel):
     customer_name: str
     phone: str
-    email: Optional[str] = None
+    email: EmailStr
     governorate: str
     address: str
     note: Optional[str] = None
