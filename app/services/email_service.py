@@ -441,6 +441,14 @@ def build_customer_email(order_data: dict) -> str:
     """
 
 
+def normalize_email(value: Any) -> str:
+    """
+    تنظيف عنوان البريد وتوحيده بحروف صغيرة حتى يطابق
+    عنوان الـSender الموثق داخل Brevo.
+    """
+    return str(value or "").strip().lower()
+
+
 async def send_brevo_email(
     recipient_email: str,
     recipient_name: str,
@@ -448,23 +456,65 @@ async def send_brevo_email(
     html_content: str,
 ) -> bool:
     """
-    إرسال إيميل واحد عن طريق Brevo API.
-    يتم عمل 3 محاولات في حالة حدوث خطأ مؤقت.
+    إرسال رسالة واحدة من خلال Brevo Transactional API.
+
+    True تعني أن Brevo قبل طلب الإرسال وأرجع messageId.
+    التسليم النهائي يُراجع من Transactional > Logs في Brevo.
     """
-    api_key = os.getenv("BREVO_API_KEY")
-    sender_email = os.getenv("BREVO_SENDER_EMAIL")
-    sender_name = os.getenv("BREVO_SENDER_NAME", "UNIQARE")
+    api_key = str(
+        os.getenv("BREVO_API_KEY") or ""
+    ).strip()
+
+    sender_email = normalize_email(
+        os.getenv("BREVO_SENDER_EMAIL")
+    )
+
+    sender_name = str(
+        os.getenv("BREVO_SENDER_NAME") or "UNIQARE"
+    ).strip()
+
+    clean_recipient_email = normalize_email(
+        recipient_email
+    )
+
+    clean_recipient_name = str(
+        recipient_name or "Customer"
+    ).strip()
+
+    clean_subject = str(
+        subject or "UNIQARE"
+    ).strip()
+
+    print(
+        "BREVO SEND REQUEST:",
+        {
+            "sender": sender_email,
+            "recipient": clean_recipient_email,
+            "subject": clean_subject,
+        },
+        flush=True,
+    )
 
     if not api_key:
-        logger.error("BREVO_API_KEY is missing.")
+        print(
+            "BREVO CONFIG ERROR: BREVO_API_KEY is missing.",
+            flush=True,
+        )
         return False
 
     if not sender_email:
-        logger.error("BREVO_SENDER_EMAIL is missing.")
+        print(
+            "BREVO CONFIG ERROR: "
+            "BREVO_SENDER_EMAIL is missing.",
+            flush=True,
+        )
         return False
 
-    if not recipient_email:
-        logger.warning("Recipient email is empty.")
+    if not clean_recipient_email:
+        print(
+            "BREVO CONFIG ERROR: Recipient email is empty.",
+            flush=True,
+        )
         return False
 
     payload = {
@@ -474,11 +524,11 @@ async def send_brevo_email(
         },
         "to": [
             {
-                "name": recipient_name or "Customer",
-                "email": recipient_email,
+                "name": clean_recipient_name,
+                "email": clean_recipient_email,
             }
         ],
-        "subject": subject,
+        "subject": clean_subject,
         "htmlContent": html_content,
     }
 
@@ -488,7 +538,21 @@ async def send_brevo_email(
         "api-key": api_key,
     }
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    # نعيد المحاولة فقط مع الأخطاء المؤقتة:
+    # Rate limit أو أخطاء سيرفر Brevo.
+    retryable_status_codes = {
+        408,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504,
+    }
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(20.0),
+    ) as client:
         for attempt in range(1, 4):
             try:
                 response = await client.post(
@@ -498,36 +562,74 @@ async def send_brevo_email(
                 )
 
                 if 200 <= response.status_code < 300:
-                    logger.info(
-                        "Brevo email sent successfully to %s",
-                        recipient_email,
+                    try:
+                        response_data = response.json()
+                    except ValueError:
+                        response_data = {
+                            "raw_response": response.text
+                        }
+
+                    print(
+                        "BREVO REQUEST ACCEPTED:",
+                        {
+                            "recipient": clean_recipient_email,
+                            "status": response.status_code,
+                            "response": response_data,
+                        },
+                        flush=True,
                     )
                     return True
 
-                logger.error(
-                    "Brevo error. Status: %s Response: %s",
-                    response.status_code,
-                    response.text,
+                print(
+                    "BREVO API ERROR:",
+                    {
+                        "attempt": attempt,
+                        "status": response.status_code,
+                        "response": response.text,
+                        "sender": sender_email,
+                        "recipient": clean_recipient_email,
+                    },
+                    flush=True,
                 )
 
-            except httpx.TimeoutException:
-                logger.error(
-                    "Brevo request timed out. Attempt %s",
-                    attempt,
+                # أخطاء 400/401/403 وغيرها غالبًا إعدادات خاطئة،
+                # لذلك لا فائدة من تكرار نفس الطلب ثلاث مرات.
+                if (
+                    response.status_code
+                    not in retryable_status_codes
+                ):
+                    return False
+
+            except httpx.TimeoutException as error:
+                print(
+                    "BREVO TIMEOUT:",
+                    {
+                        "attempt": attempt,
+                        "error": str(error),
+                    },
+                    flush=True,
                 )
 
             except httpx.RequestError as error:
-                logger.error(
-                    "Brevo network error on attempt %s: %s",
-                    attempt,
-                    error,
+                print(
+                    "BREVO NETWORK ERROR:",
+                    {
+                        "attempt": attempt,
+                        "error": str(error),
+                    },
+                    flush=True,
                 )
 
-            except Exception:
-                logger.exception(
-                    "Unexpected email error on attempt %s",
-                    attempt,
+            except Exception as error:
+                print(
+                    "BREVO UNEXPECTED ERROR:",
+                    {
+                        "attempt": attempt,
+                        "error": repr(error),
+                    },
+                    flush=True,
                 )
+                return False
 
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
@@ -535,49 +637,95 @@ async def send_brevo_email(
     return False
 
 
-async def send_order_emails(order_data: dict) -> None:
+async def send_order_emails(
+    order_data: dict,
+) -> None:
     """
-    إرسال إيميل الأدمن ثم إيميل العميل.
+    إرسال إشعار للأدمن وتأكيد للعميل بعد حفظ الطلب.
 
-    أي خطأ هنا لا يلغي الأوردر لأن الوظيفة تعمل
-    بعد حفظ الأوردر كـ Background Task.
+    فشل إرسال أي رسالة لا يلغي الطلب؛ لأن الدالة تعمل
+    من خلال FastAPI BackgroundTasks.
     """
-    admin_email = os.getenv("ADMIN_EMAIL")
-    store_name = os.getenv("BREVO_SENDER_NAME", "UNIQARE")
-
     order_id = order_data.get("id", "جديد")
-    customer_name = str(
-        order_data.get("customer_name") or "عميل جديد"
+
+    admin_email = normalize_email(
+        os.getenv("ADMIN_EMAIL")
     )
+
+    store_name = str(
+        os.getenv("BREVO_SENDER_NAME") or "UNIQARE"
+    ).strip()
+
+    customer_name = str(
+        order_data.get("customer_name")
+        or "عميل جديد"
+    ).strip()
+
+    customer_email = normalize_email(
+        order_data.get("customer_email")
+        or order_data.get("email")
+    )
+
+    print(
+        f"EMAIL TASK STARTED FOR ORDER #{order_id}",
+        flush=True,
+    )
+
+    print(
+        "EMAIL TASK RECIPIENTS:",
+        {
+            "admin": admin_email,
+            "customer": customer_email,
+        },
+        flush=True,
+    )
+
+    admin_result = False
+    customer_result = False
 
     # إيميل الأدمن
     if admin_email:
-        await send_brevo_email(
+        admin_result = await send_brevo_email(
             recipient_email=admin_email,
             recipient_name="UNIQARE Admin",
-            subject=f"طلب جديد #{order_id} - {store_name}",
-            html_content=build_admin_email(order_data),
+            subject=(
+                f"طلب جديد #{order_id} - {store_name}"
+            ),
+            html_content=build_admin_email(
+                order_data
+            ),
         )
     else:
-        logger.error(
-            "ADMIN_EMAIL is missing. Admin email was not sent."
+        print(
+            "ADMIN EMAIL SKIPPED: ADMIN_EMAIL is missing.",
+            flush=True,
         )
 
     # إيميل العميل
-    customer_email = str(
-        order_data.get("customer_email") or ""
-    ).strip()
-
     if customer_email:
-        await send_brevo_email(
+        customer_result = await send_brevo_email(
             recipient_email=customer_email,
             recipient_name=customer_name,
-            subject=f"تم استلام طلبك #{order_id} - {store_name}",
-            html_content=build_customer_email(order_data),
+            subject=(
+                f"تم استلام طلبك #{order_id} - "
+                f"{store_name}"
+            ),
+            html_content=build_customer_email(
+                order_data
+            ),
         )
     else:
-        logger.warning(
-            "Order %s has no customer email. "
-            "Only the admin notification was attempted.",
-            order_id,
+        print(
+            f"CUSTOMER EMAIL SKIPPED FOR ORDER #{order_id}: "
+            "customer email is missing.",
+            flush=True,
         )
+
+    print(
+        f"EMAIL TASK FINISHED FOR ORDER #{order_id}:",
+        {
+            "admin_accepted_by_brevo": admin_result,
+            "customer_accepted_by_brevo": customer_result,
+        },
+        flush=True,
+    )
