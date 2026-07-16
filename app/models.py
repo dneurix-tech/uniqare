@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -39,13 +40,11 @@ class Product(Base):
         nullable=True,
     )
 
-    # Current selling price.
     price = Column(
         Float,
         nullable=False,
     )
 
-    # Optional previous price shown with a line through it.
     old_price = Column(
         Float,
         nullable=True,
@@ -64,11 +63,19 @@ class Product(Base):
     stock = Column(
         Integer,
         default=0,
+        nullable=False,
     )
 
     is_active = Column(
         Boolean,
         default=True,
+        nullable=False,
+    )
+
+    is_bundle = Column(
+        Boolean,
+        default=False,
+        nullable=False,
     )
 
     orders = relationship(
@@ -79,6 +86,130 @@ class Product(Base):
     order_items = relationship(
         "OrderItem",
         back_populates="product",
+    )
+
+    images = relationship(
+        "ProductImage",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        order_by="ProductImage.sort_order",
+    )
+
+    bundle_items = relationship(
+        "BundleItem",
+        foreign_keys="BundleItem.bundle_product_id",
+        back_populates="bundle_product",
+        cascade="all, delete-orphan",
+    )
+
+    included_in_bundles = relationship(
+        "BundleItem",
+        foreign_keys="BundleItem.child_product_id",
+        back_populates="child_product",
+        passive_deletes=True,
+    )
+
+
+class ProductImage(Base):
+    __tablename__ = "product_images"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    product_id = Column(
+        Integer,
+        ForeignKey(
+            "products.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    image_url = Column(
+        String(500),
+        nullable=False,
+    )
+
+    public_id = Column(
+        String(300),
+        nullable=True,
+    )
+
+    sort_order = Column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    product = relationship(
+        "Product",
+        back_populates="images",
+    )
+
+
+class BundleItem(Base):
+    __tablename__ = "bundle_items"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "bundle_product_id",
+            "child_product_id",
+            name="uq_bundle_child_product",
+        ),
+    )
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    bundle_product_id = Column(
+        Integer,
+        ForeignKey(
+            "products.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    child_product_id = Column(
+        Integer,
+        ForeignKey(
+            "products.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    quantity = Column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    bundle_product = relationship(
+        "Product",
+        foreign_keys=[bundle_product_id],
+        back_populates="bundle_items",
+    )
+
+    child_product = relationship(
+        "Product",
+        foreign_keys=[child_product_id],
+        back_populates="included_in_bundles",
     )
 
 
@@ -178,7 +309,6 @@ class Order(Base):
         nullable=True,
     )
 
-    # Legacy single-product compatibility fields.
     product_id = Column(
         Integer,
         ForeignKey("products.id"),
@@ -201,8 +331,6 @@ class Order(Base):
         nullable=True,
     )
 
-    # Coupon snapshot keeps the original coupon data
-    # even if the coupon is edited or deleted later.
     coupon_discount_type = Column(
         String(20),
         nullable=True,
@@ -272,7 +400,10 @@ class OrderItem(Base):
 
     order_id = Column(
         Integer,
-        ForeignKey("orders.id"),
+        ForeignKey(
+            "orders.id",
+            ondelete="CASCADE",
+        ),
         nullable=False,
     )
 
@@ -305,6 +436,53 @@ class OrderItem(Base):
     product = relationship(
         "Product",
         back_populates="order_items",
+    )
+
+    components = relationship(
+        "OrderItemComponent",
+        back_populates="order_item",
+        cascade="all, delete-orphan",
+    )
+
+
+class OrderItemComponent(Base):
+    __tablename__ = "order_item_components"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    order_item_id = Column(
+        Integer,
+        ForeignKey(
+            "order_items.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    product_id = Column(
+        Integer,
+        ForeignKey("products.id"),
+        nullable=False,
+        index=True,
+    )
+
+    quantity = Column(
+        Integer,
+        nullable=False,
+    )
+
+    order_item = relationship(
+        "OrderItem",
+        back_populates="components",
+    )
+
+    product = relationship(
+        "Product",
     )
 
 
@@ -347,10 +525,15 @@ class Review(Base):
         default=datetime.utcnow,
     )
 
+
 class Announcement(Base):
     __tablename__ = "announcements"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
 
     content = Column(
         Text,

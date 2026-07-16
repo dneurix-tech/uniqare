@@ -1,24 +1,20 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class ProductBase(BaseModel):
     name: str
     short_description: Optional[str] = None
     long_description: Optional[str] = None
-
-    # Current selling price.
     price: float
-
-    # Optional previous price displayed with a line through it.
     old_price: Optional[float] = None
-
     image_url: Optional[str] = None
     category: Optional[str] = None
     stock: int = 0
     is_active: bool = True
+    is_bundle: bool = False
 
 
 class ProductCreate(ProductBase):
@@ -35,6 +31,7 @@ class ProductUpdate(BaseModel):
     category: Optional[str] = None
     stock: Optional[int] = None
     is_active: Optional[bool] = None
+    is_bundle: Optional[bool] = None
 
 
 class ProductResponse(ProductBase):
@@ -42,6 +39,33 @@ class ProductResponse(ProductBase):
 
     class Config:
         from_attributes = True
+
+
+class BundleImageResponse(BaseModel):
+    id: int
+    image_url: str
+    sort_order: int
+
+    class Config:
+        from_attributes = True
+
+
+class BundleItemResponse(BaseModel):
+    id: int
+    product_id: int
+    product_name: str
+    product_image: Optional[str] = None
+    quantity: int
+    product_stock: int
+
+
+class BundleResponse(ProductResponse):
+    images: list[BundleImageResponse] = Field(
+        default_factory=list,
+    )
+    bundle_items: list[BundleItemResponse] = Field(
+        default_factory=list,
+    )
 
 
 class CouponCreate(BaseModel):
@@ -84,6 +108,17 @@ class OrderItemCreate(BaseModel):
     quantity: int = 1
 
 
+class OrderItemComponentResponse(BaseModel):
+    id: int
+    product_id: int
+    product_name: Optional[str] = None
+    product_image: Optional[str] = None
+    quantity: int
+
+    class Config:
+        from_attributes = True
+
+
 class OrderItemResponse(BaseModel):
     id: int
     product_id: int
@@ -92,6 +127,9 @@ class OrderItemResponse(BaseModel):
     quantity: int
     unit_price: float
     total_price: float
+    bundle_components: list[OrderItemComponentResponse] = Field(
+        default_factory=list,
+    )
 
     class Config:
         from_attributes = True
@@ -138,7 +176,7 @@ class OrderResponse(BaseModel):
         default_factory=list,
     )
 
-class Config:
+    class Config:
         from_attributes = True
 
 
@@ -174,9 +212,8 @@ class OrderAdminUpdate(BaseModel):
     payment_status: Optional[str] = None
     payment_details: Optional[str] = None
 
-    # When supplied, this list fully replaces
-    # the current products in the order.
     items: Optional[list[OrderItemCreate]] = None
+
 
 class AnnouncementCreate(BaseModel):
     content: str
@@ -197,4 +234,3 @@ class AnnouncementResponse(BaseModel):
 
     class Config:
         from_attributes = True
-    

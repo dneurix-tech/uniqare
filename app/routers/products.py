@@ -1,12 +1,19 @@
 from typing import Optional
 
 import cloudinary.uploader
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.cloudinary_config import cloudinary
 from app.database import get_db
-from app.models import Product
+from app.models import BundleItem, Product
 from app.schemas import ProductResponse
 
 
@@ -16,8 +23,39 @@ router = APIRouter(
 )
 
 
-def upload_image_to_cloudinary(image: UploadFile) -> str:
-    if not image.content_type or not image.content_type.startswith("image/"):
+def regular_products_query(db: Session):
+    return (
+        db.query(Product)
+        .filter(Product.is_bundle.is_(False))
+    )
+
+
+def get_regular_product_or_404(
+    db: Session,
+    product_id: int,
+) -> Product:
+    product = (
+        regular_products_query(db)
+        .filter(Product.id == product_id)
+        .first()
+    )
+
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        )
+
+    return product
+
+
+def upload_image_to_cloudinary(
+    image: UploadFile,
+) -> str:
+    if (
+        not image.content_type
+        or not image.content_type.startswith("image/")
+    ):
         raise HTTPException(
             status_code=400,
             detail="Uploaded file must be an image",
@@ -35,7 +73,9 @@ def upload_image_to_cloudinary(image: UploadFile) -> str:
         if not image_url:
             raise HTTPException(
                 status_code=500,
-                detail="Cloudinary did not return image URL",
+                detail=(
+                    "Cloudinary did not return image URL"
+                ),
             )
 
         return image_url
@@ -44,24 +84,22 @@ def upload_image_to_cloudinary(image: UploadFile) -> str:
         raise
 
     except Exception as error:
-        print("Cloudinary upload error:", repr(error))
+        print(
+            "Cloudinary upload error:",
+            repr(error),
+        )
 
         raise HTTPException(
             status_code=500,
-            detail=f"Image upload failed: {str(error)}",
+            detail=(
+                f"Image upload failed: {str(error)}"
+            ),
         )
 
 
 def parse_optional_old_price(
     old_price: Optional[str],
 ) -> Optional[float]:
-    """
-    Converts the multipart form value to float.
-
-    An empty value removes the old price and makes the product
-    display only its current price.
-    """
-
     if old_price is None:
         return None
 
@@ -94,13 +132,21 @@ def validate_product_prices(
     if price <= 0:
         raise HTTPException(
             status_code=400,
-            detail="Current price must be greater than 0",
+            detail=(
+                "Current price must be greater than 0"
+            ),
         )
 
-    if old_price is not None and old_price <= price:
+    if (
+        old_price is not None
+        and old_price <= price
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Old price must be greater than current price",
+            detail=(
+                "Old price must be greater than "
+                "current price"
+            ),
         )
 
 
@@ -111,14 +157,12 @@ def validate_product_prices(
 def get_products(
     db: Session = Depends(get_db),
 ):
-    products = (
-        db.query(Product)
-        .filter(Product.is_active == True)
+    return (
+        regular_products_query(db)
+        .filter(Product.is_active.is_(True))
         .order_by(Product.id.desc())
         .all()
     )
-
-    return products
 
 
 @router.get(
@@ -128,13 +172,11 @@ def get_products(
 def get_all_products(
     db: Session = Depends(get_db),
 ):
-    products = (
-        db.query(Product)
+    return (
+        regular_products_query(db)
         .order_by(Product.id.desc())
         .all()
     )
-
-    return products
 
 
 @router.post(
@@ -153,7 +195,9 @@ def create_product(
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    if not name.strip():
+    cleaned_name = name.strip()
+
+    if not cleaned_name:
         raise HTTPException(
             status_code=400,
             detail="Product name is required",
@@ -165,7 +209,9 @@ def create_product(
             detail="Stock cannot be negative",
         )
 
-    parsed_old_price = parse_optional_old_price(old_price)
+    parsed_old_price = parse_optional_old_price(
+        old_price
+    )
 
     validate_product_prices(
         price=price,
@@ -175,14 +221,16 @@ def create_product(
     image_url = None
 
     if image:
-        image_url = upload_image_to_cloudinary(image)
+        image_url = upload_image_to_cloudinary(
+            image
+        )
 
     if stock <= 0:
         stock = 0
         is_active = False
 
     new_product = Product(
-        name=name.strip(),
+        name=cleaned_name,
         short_description=short_description,
         long_description=long_description,
         price=price,
@@ -191,6 +239,7 @@ def create_product(
         category=category,
         stock=stock,
         is_active=is_active,
+        is_bundle=False,
     )
 
     db.add(new_product)
@@ -208,19 +257,10 @@ def get_product(
     product_id: int,
     db: Session = Depends(get_db),
 ):
-    product = (
-        db.query(Product)
-        .filter(Product.id == product_id)
-        .first()
+    return get_regular_product_or_404(
+        db=db,
+        product_id=product_id,
     )
-
-    if not product:
-        raise HTTPException(
-            status_code=404,
-            detail="Product not found",
-        )
-
-    return product
 
 
 @router.patch(
@@ -240,19 +280,15 @@ def update_product(
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    product = (
-        db.query(Product)
-        .filter(Product.id == product_id)
-        .first()
+    product = get_regular_product_or_404(
+        db=db,
+        product_id=product_id,
     )
 
-    if not product:
-        raise HTTPException(
-            status_code=404,
-            detail="Product not found",
-        )
-
-    if name is not None and not name.strip():
+    if (
+        name is not None
+        and not name.strip()
+    ):
         raise HTTPException(
             status_code=400,
             detail="Product name cannot be empty",
@@ -264,7 +300,9 @@ def update_product(
             detail="Stock cannot be negative",
         )
 
-    old_price_was_provided = old_price is not None
+    old_price_was_provided = (
+        old_price is not None
+    )
 
     parsed_old_price = (
         parse_optional_old_price(old_price)
@@ -308,11 +346,14 @@ def update_product(
         product.is_active = is_active
 
     if image:
-        product.image_url = upload_image_to_cloudinary(image)
+        product.image_url = upload_image_to_cloudinary(
+            image
+        )
 
     if product.stock <= 0:
         product.stock = 0
         product.is_active = False
+
     elif is_active is None:
         product.is_active = True
 
@@ -327,20 +368,42 @@ def delete_product(
     product_id: int,
     db: Session = Depends(get_db),
 ):
-    product = (
-        db.query(Product)
-        .filter(Product.id == product_id)
+    product = get_regular_product_or_404(
+        db=db,
+        product_id=product_id,
+    )
+
+    used_in_bundle = (
+        db.query(BundleItem)
+        .filter(
+            BundleItem.child_product_id == product_id
+        )
         .first()
     )
 
-    if not product:
+    if used_in_bundle:
         raise HTTPException(
-            status_code=404,
-            detail="Product not found",
+            status_code=400,
+            detail=(
+                "This product is used inside a bundle. "
+                "Remove it from the bundle first."
+            ),
         )
 
-    db.delete(product)
-    db.commit()
+    try:
+        db.delete(product)
+        db.commit()
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This product cannot be deleted because "
+                "it is used in an existing order."
+            ),
+        )
 
     return {
         "message": "Product deleted successfully",

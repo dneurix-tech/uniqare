@@ -4,16 +4,25 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "sqlite:///./app.db",
+)
 
 engine_kwargs = {}
 
 if DATABASE_URL.startswith("sqlite"):
-    engine_kwargs["connect_args"] = {"check_same_thread": False}
+    engine_kwargs["connect_args"] = {
+        "check_same_thread": False,
+    }
 
-engine = create_engine(DATABASE_URL, **engine_kwargs)
+engine = create_engine(
+    DATABASE_URL,
+    **engine_kwargs,
+)
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -34,22 +43,23 @@ def add_column_if_missing(
     column_name,
     column_sql,
 ):
-    if column_name not in existing_columns:
-        conn.execute(
-            text(
-                f"ALTER TABLE {table_name} "
-                f"ADD COLUMN {column_sql}"
-            )
+    if column_name in existing_columns:
+        return
+
+    conn.execute(
+        text(
+            f"ALTER TABLE {table_name} "
+            f"ADD COLUMN {column_sql}"
         )
+    )
+
+    existing_columns.add(column_name)
 
 
 def ensure_schema_compatibility():
     """
-    Creates missing tables and safely adds newer columns to
+    Create missing tables and safely add newer columns to
     existing SQLite or PostgreSQL databases.
-
-    This function runs when the application starts, so old_price
-    will be added automatically without running a manual SQL command.
     """
 
     Base.metadata.create_all(bind=engine)
@@ -110,6 +120,24 @@ def ensure_schema_compatibility():
                 existing_columns,
                 "is_active",
                 "is_active BOOLEAN DEFAULT TRUE",
+            )
+
+            add_column_if_missing(
+                conn,
+                "products",
+                existing_columns,
+                "is_bundle",
+                "is_bundle BOOLEAN DEFAULT FALSE",
+            )
+
+            conn.execute(
+                text(
+                    """
+                    UPDATE products
+                    SET is_bundle = FALSE
+                    WHERE is_bundle IS NULL
+                    """
+                )
             )
 
         if "orders" in table_names:
@@ -198,6 +226,7 @@ def ensure_schema_compatibility():
                 "created_at TIMESTAMP",
             )
 
+        # Create any newly added tables such as bundle tables.
         Base.metadata.create_all(bind=engine)
 
         refreshed_inspector = inspect(engine)

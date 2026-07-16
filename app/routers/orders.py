@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime
 
 from fastapi import (
@@ -8,10 +9,15 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session, joinedload
 
-from app.services.email_service import send_order_emails
-
 from app.database import get_db
-from app.models import Coupon, Order, OrderItem, Product
+from app.models import (
+    BundleItem,
+    Coupon,
+    Order,
+    OrderItem,
+    OrderItemComponent,
+    Product,
+)
 from app.schemas import (
     CheckCouponRequest,
     CheckCouponResponse,
@@ -19,8 +25,13 @@ from app.schemas import (
     OrderCreate,
     OrderPaymentUpdate,
 )
+from app.services.email_service import send_order_emails
 
-router = APIRouter(prefix="/orders", tags=["Orders"])
+
+router = APIRouter(
+    prefix="/orders",
+    tags=["Orders"],
+)
 
 CART_DISCOUNT_THRESHOLD = 1000
 CART_DISCOUNT_PERCENT = 0.10
@@ -52,34 +63,63 @@ def order_to_dict(order: Order):
             {
                 "id": item.id,
                 "product_id": item.product_id,
-                "product_name": item.product.name if item.product else None,
+                "product_name": (
+                    item.product.name
+                    if item.product
+                    else None
+                ),
                 "product_image": (
-                    item.product.image_url if item.product else None
+                    item.product.image_url
+                    if item.product
+                    else None
                 ),
                 "quantity": item.quantity,
                 "unit_price": item.unit_price,
                 "total_price": item.total_price,
+                "bundle_components": [
+                    {
+                        "id": component.id,
+                        "product_id": component.product_id,
+                        "product_name": (
+                            component.product.name
+                            if component.product
+                            else None
+                        ),
+                        "product_image": (
+                            component.product.image_url
+                            if component.product
+                            else None
+                        ),
+                        "quantity": component.quantity,
+                    }
+                    for component in item.components
+                ],
             }
             for item in order.items
         ],
     }
 
 
-def create_order_email_snapshot(order_data: dict):
-    """
-    تجهيز نسخة مستقلة من بيانات الطلب لإرسالها إلى
-    Background Task بدون تمرير SQLAlchemy objects.
-    """
+def create_order_email_snapshot(
+    order_data: dict,
+):
     email_snapshot = {
         **order_data,
         "items": [
-            dict(item)
+            {
+                **dict(item),
+                "bundle_components": [
+                    dict(component)
+                    for component in item.get(
+                        "bundle_components",
+                        [],
+                    )
+                ],
+            }
             for item in order_data.get("items", [])
         ],
     }
 
-    # email_service يستخدم customer_email، بينما اسم الحقل
-    # داخل موديل الطلب هو email. نرسل المفتاحين للتوافق.
     email_snapshot["customer_email"] = (
         order_data.get("email") or ""
     )
@@ -87,11 +127,18 @@ def create_order_email_snapshot(order_data: dict):
     return email_snapshot
 
 
-def get_order_with_items(db: Session, order_id: int):
+def get_order_with_items(
+    db: Session,
+    order_id: int,
+):
     return (
         db.query(Order)
         .options(
-            joinedload(Order.items).joinedload(OrderItem.product)
+            joinedload(Order.items)
+            .joinedload(OrderItem.product),
+            joinedload(Order.items)
+            .joinedload(OrderItem.components)
+            .joinedload(OrderItemComponent.product),
         )
         .filter(Order.id == order_id)
         .first()
@@ -115,7 +162,10 @@ def merge_item_quantities(items):
                 detail="Quantity must be greater than 0",
             )
 
-        merged[product_id] = merged.get(product_id, 0) + quantity
+        merged[product_id] = (
+            merged.get(product_id, 0)
+            + quantity
+        )
 
     return merged
 
@@ -148,7 +198,10 @@ def calculate_coupon_discount(
             detail="Coupon is not active",
         )
 
-    if coupon.expires_at and coupon.expires_at < datetime.utcnow():
+    if (
+        coupon.expires_at
+        and coupon.expires_at < datetime.utcnow()
+    ):
         raise HTTPException(
             status_code=400,
             detail="Coupon has expired",
@@ -174,7 +227,8 @@ def calculate_coupon_discount(
 
     if coupon.discount_type == "percent":
         discount_amount = (
-            subtotal_price * (coupon.discount_value / 100)
+            subtotal_price
+            * (coupon.discount_value / 100)
         )
 
     elif coupon.discount_type == "fixed":
@@ -199,11 +253,17 @@ def calculate_snapshot_coupon_discount(
     discount_value: float | None,
     subtotal_price: float,
 ):
-    if not discount_type or discount_value is None:
+    if (
+        not discount_type
+        or discount_value is None
+    ):
         return 0.0
 
     if discount_type == "percent":
-        value = subtotal_price * (discount_value / 100)
+        value = (
+            subtotal_price
+            * (discount_value / 100)
+        )
 
     elif discount_type == "fixed":
         value = discount_value
@@ -217,15 +277,13 @@ def calculate_snapshot_coupon_discount(
     )
 
 
-def calculate_cart_discount(subtotal_price: float):
-    """
-    يمنح العميل خصم 10% تلقائيًا عندما يكون إجمالي
-    المنتجات 1000 جنيه بالضبط أو أكثر.
-    """
-
+def calculate_cart_discount(
+    subtotal_price: float,
+):
     if subtotal_price >= CART_DISCOUNT_THRESHOLD:
         return round(
-            subtotal_price * CART_DISCOUNT_PERCENT,
+            subtotal_price
+            * CART_DISCOUNT_PERCENT,
             2,
         )
 
@@ -237,11 +295,6 @@ def calculate_best_discount(
     cart_discount: float,
     subtotal_price: float,
 ):
-    """
-    اختيار الخصم الأكبر فقط، بدون جمع خصم الكوبون
-    مع الخصم التلقائي.
-    """
-
     best_discount = max(
         coupon_discount,
         cart_discount,
@@ -265,11 +318,18 @@ def calculate_existing_order_discount(
     if not order.coupon_code:
         return cart_discount
 
-    discount_type = order.coupon_discount_type
-    discount_value = order.coupon_discount_value
+    discount_type = (
+        order.coupon_discount_type
+    )
 
-    # دعم الطلبات القديمة التي لم تكن تحفظ بيانات الكوبون.
-    if not discount_type or discount_value is None:
+    discount_value = (
+        order.coupon_discount_value
+    )
+
+    if (
+        not discount_type
+        or discount_value is None
+    ):
         coupon = (
             db.query(Coupon)
             .filter(
@@ -283,12 +343,18 @@ def calculate_existing_order_discount(
             discount_type = coupon.discount_type
             discount_value = coupon.discount_value
 
-            order.coupon_discount_type = discount_type
-            order.coupon_discount_value = discount_value
+            order.coupon_discount_type = (
+                discount_type
+            )
 
-        elif order.subtotal_price and order.discount_amount:
-            # في حالة حذف الكوبون، يتم الاحتفاظ بنسبة
-            # الخصم القديمة للطلب.
+            order.coupon_discount_value = (
+                discount_value
+            )
+
+        elif (
+            order.subtotal_price
+            and order.discount_amount
+        ):
             old_ratio = (
                 order.discount_amount
                 / order.subtotal_price
@@ -323,42 +389,343 @@ def calculate_existing_order_discount(
     )
 
 
-def get_product_for_new_order(
+def build_stock_plan(
     db: Session,
-    product_id: int,
-    quantity: int,
+    quantities: dict[int, int],
+    lock: bool,
 ):
-    product = (
+    """
+    Build one combined stock plan.
+
+    Regular products consume their own stock.
+    Bundles consume the stock of their component products.
+    The combined plan prevents over-selling when the same product
+    exists both individually and inside one or more bundles.
+    """
+
+    ordered_product_ids = list(quantities)
+
+    ordered_query = (
         db.query(Product)
-        .filter(Product.id == product_id)
-        .with_for_update()
-        .first()
+        .filter(
+            Product.id.in_(
+                ordered_product_ids
+            )
+        )
     )
 
-    if not product:
+    if lock:
+        ordered_query = (
+            ordered_query.with_for_update()
+        )
+
+    ordered_products = ordered_query.all()
+
+    ordered_products_by_id = {
+        product.id: product
+        for product in ordered_products
+    }
+
+    missing_ids = (
+        set(ordered_product_ids)
+        - set(ordered_products_by_id)
+    )
+
+    if missing_ids:
+        missing_id = sorted(missing_ids)[0]
+
         raise HTTPException(
             status_code=404,
-            detail="Product not found",
-        )
-
-    if product.is_active is False:
-        raise HTTPException(
-            status_code=400,
             detail=(
-                f"Product {product.name} is not available"
+                f"Product #{missing_id} not found"
             ),
         )
 
-    if product.stock < quantity:
+    bundle_ids = [
+        product_id
+        for product_id, product
+        in ordered_products_by_id.items()
+        if product.is_bundle
+    ]
+
+    bundle_items_by_bundle: dict[
+        int,
+        list[BundleItem],
+    ] = defaultdict(list)
+
+    if bundle_ids:
+        bundle_items = (
+            db.query(BundleItem)
+            .filter(
+                BundleItem.bundle_product_id.in_(
+                    bundle_ids
+                )
+            )
+            .all()
+        )
+
+        for bundle_item in bundle_items:
+            bundle_items_by_bundle[
+                bundle_item.bundle_product_id
+            ].append(bundle_item)
+
+    stock_requirements: dict[int, int] = (
+        defaultdict(int)
+    )
+
+    bundle_components: dict[
+        int,
+        list[tuple[int, int]],
+    ] = {}
+
+    for product_id, order_quantity in (
+        quantities.items()
+    ):
+        product = ordered_products_by_id[
+            product_id
+        ]
+
+        if product.is_active is False:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Product {product.name} "
+                    "is not available"
+                ),
+            )
+
+        if product.is_bundle:
+            component_rows = (
+                bundle_items_by_bundle.get(
+                    product_id,
+                    [],
+                )
+            )
+
+            if not component_rows:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Bundle {product.name} "
+                        "has no products"
+                    ),
+                )
+
+            bundle_components[product_id] = []
+
+            for component in component_rows:
+                required_quantity = (
+                    int(component.quantity)
+                    * order_quantity
+                )
+
+                stock_requirements[
+                    component.child_product_id
+                ] += required_quantity
+
+                bundle_components[
+                    product_id
+                ].append(
+                    (
+                        component.child_product_id,
+                        int(component.quantity),
+                    )
+                )
+
+        else:
+            stock_requirements[
+                product_id
+            ] += order_quantity
+
+    stock_product_ids = list(
+        stock_requirements
+    )
+
+    stock_query = (
+        db.query(Product)
+        .filter(
+            Product.id.in_(
+                stock_product_ids
+            )
+        )
+    )
+
+    if lock:
+        stock_query = (
+            stock_query.with_for_update()
+        )
+
+    stock_products = stock_query.all()
+
+    stock_products_by_id = {
+        product.id: product
+        for product in stock_products
+    }
+
+    missing_stock_products = (
+        set(stock_product_ids)
+        - set(stock_products_by_id)
+    )
+
+    if missing_stock_products:
+        missing_id = sorted(
+            missing_stock_products
+        )[0]
+
         raise HTTPException(
-            status_code=400,
+            status_code=404,
             detail=(
-                f"Only {product.stock} item(s) are "
-                f"available for {product.name}"
+                f"Bundle component #{missing_id} "
+                "was not found"
             ),
         )
 
-    return product
+    for (
+        stock_product_id,
+        required_quantity,
+    ) in stock_requirements.items():
+        stock_product = (
+            stock_products_by_id[
+                stock_product_id
+            ]
+        )
+
+        if stock_product.is_bundle:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Nested bundles are not supported"
+                ),
+            )
+
+        if stock_product.is_active is False:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Product {stock_product.name} "
+                    "is not available"
+                ),
+            )
+
+        available_stock = int(
+            stock_product.stock or 0
+        )
+
+        if available_stock < required_quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Only {available_stock} item(s) "
+                    f"are available for "
+                    f"{stock_product.name}"
+                ),
+            )
+
+    return {
+        "ordered_products": (
+            ordered_products_by_id
+        ),
+        "stock_requirements": dict(
+            stock_requirements
+        ),
+        "stock_products": (
+            stock_products_by_id
+        ),
+        "bundle_components": (
+            bundle_components
+        ),
+    }
+
+
+def deduct_stock_plan(
+    stock_requirements: dict[int, int],
+    stock_products: dict[int, Product],
+):
+    for (
+        product_id,
+        required_quantity,
+    ) in stock_requirements.items():
+        product = stock_products[product_id]
+
+        product.stock -= required_quantity
+
+        if product.stock <= 0:
+            product.stock = 0
+            product.is_active = False
+
+
+def restore_order_item_stock(
+    item: OrderItem,
+):
+    if item.components:
+        for component in item.components:
+            product = component.product
+
+            if product:
+                product.stock += (
+                    component.quantity
+                )
+
+                if product.stock > 0:
+                    product.is_active = True
+
+        return
+
+    product = item.product
+
+    if product:
+        product.stock += item.quantity
+
+        if product.stock > 0:
+            product.is_active = True
+
+
+def add_order_item_with_snapshot(
+    db: Session,
+    order: Order,
+    product: Product,
+    quantity: int,
+    unit_price: float,
+    bundle_components: dict[
+        int,
+        list[tuple[int, int]],
+    ],
+):
+    order_item = OrderItem(
+        order_id=order.id,
+        product_id=product.id,
+        quantity=quantity,
+        unit_price=unit_price,
+        total_price=round(
+            unit_price * quantity,
+            2,
+        ),
+    )
+
+    db.add(order_item)
+    db.flush()
+
+    for (
+        component_product_id,
+        component_quantity_per_bundle,
+    ) in bundle_components.get(
+        product.id,
+        [],
+    ):
+        db.add(
+            OrderItemComponent(
+                order_item_id=order_item.id,
+                product_id=(
+                    component_product_id
+                ),
+                quantity=(
+                    component_quantity_per_bundle
+                    * quantity
+                ),
+            )
+        )
+
+    return order_item
 
 
 def replace_order_items(
@@ -373,145 +740,75 @@ def replace_order_items(
     if not quantities:
         raise HTTPException(
             status_code=400,
-            detail="At least one product is required",
+            detail=(
+                "At least one product is required"
+            ),
         )
 
     old_items = list(order.items)
-
-    old_quantity_by_product = {
-        item.product_id: item.quantity
-        for item in old_items
-    }
 
     old_unit_price_by_product = {
         item.product_id: item.unit_price
         for item in old_items
     }
 
-    all_product_ids = (
-        set(old_quantity_by_product)
-        | set(quantities)
-    )
-
-    products = (
-        db.query(Product)
-        .filter(Product.id.in_(all_product_ids))
-        .with_for_update()
-        .all()
-    )
-
-    products_by_id = {
-        product.id: product
-        for product in products
-    }
-
-    missing_products = (
-        set(quantities)
-        - set(products_by_id)
-    )
-
-    if missing_products:
-        missing_id = sorted(missing_products)[0]
-
-        raise HTTPException(
-            status_code=404,
-            detail=f"Product #{missing_id} not found",
-        )
-
-    # التحقق من الكمية المطلوبة مقارنة بالمخزون،
-    # مع إضافة كمية الطلب الحالية إلى المخزون المتاح.
-    for product_id, requested_quantity in quantities.items():
-        product = products_by_id[product_id]
-
-        previous_quantity = (
-            old_quantity_by_product.get(
-                product_id,
-                0,
-            )
-        )
-
-        available_quantity = (
-            product.stock
-            + previous_quantity
-        )
-
-        if (
-            product.is_active is False
-            and requested_quantity > previous_quantity
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Product {product.name} "
-                    "is not available"
-                ),
-            )
-
-        if requested_quantity > available_quantity:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Only {available_quantity} item(s) "
-                    f"are available for {product.name}"
-                ),
-            )
-
-    # إعادة كميات المنتجات القديمة إلى المخزون.
     for item in old_items:
-        product = products_by_id.get(
-            item.product_id
-        )
+        restore_order_item_stock(item)
 
-        if product:
-            product.stock += item.quantity
+    stock_plan = build_stock_plan(
+        db=db,
+        quantities=quantities,
+        lock=True,
+    )
 
-            if product.stock > 0:
-                product.is_active = True
+    deduct_stock_plan(
+        stock_requirements=(
+            stock_plan["stock_requirements"]
+        ),
+        stock_products=(
+            stock_plan["stock_products"]
+        ),
+    )
 
-    # حذف عناصر الطلب القديمة وإعادة إنشائها.
     order.items.clear()
     db.flush()
 
     subtotal_price = 0.0
 
-    for product_id, quantity in quantities.items():
-        product = products_by_id[product_id]
-
-        unit_price = old_unit_price_by_product.get(
-            product_id,
-            product.price,
+    for product_id, quantity in (
+        quantities.items()
+    ):
+        product = (
+            stock_plan["ordered_products"][
+                product_id
+            ]
         )
 
-        item_total = round(
-            unit_price * quantity,
-            2,
-        )
-
-        if product.stock < quantity:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Only {product.stock} item(s) "
-                    f"are available for {product.name}"
-                ),
+        unit_price = (
+            old_unit_price_by_product.get(
+                product_id,
+                product.price,
             )
+        )
 
-        product.stock -= quantity
-
-        if product.stock <= 0:
-            product.stock = 0
-            product.is_active = False
-
-        order.items.append(
-            OrderItem(
-                product_id=product_id,
+        order_item = (
+            add_order_item_with_snapshot(
+                db=db,
+                order=order,
+                product=product,
                 quantity=quantity,
                 unit_price=unit_price,
-                total_price=item_total,
+                bundle_components=(
+                    stock_plan[
+                        "bundle_components"
+                    ]
+                ),
             )
         )
 
-        subtotal_price += item_total
+        subtotal_price += (
+            order_item.total_price
+        )
 
     subtotal_price = round(
         subtotal_price,
@@ -562,21 +859,23 @@ def check_coupon(
             detail="At least one item is required",
         )
 
-    subtotal_price = 0.0
-
-    for product_id, quantity in quantities.items():
-        product = get_product_for_new_order(
-            db=db,
-            product_id=product_id,
-            quantity=quantity,
-        )
-
-        subtotal_price += (
-            product.price * quantity
-        )
+    stock_plan = build_stock_plan(
+        db=db,
+        quantities=quantities,
+        lock=False,
+    )
 
     subtotal_price = round(
-        subtotal_price,
+        sum(
+            (
+                stock_plan[
+                    "ordered_products"
+                ][product_id].price
+                * quantity
+            )
+            for product_id, quantity
+            in quantities.items()
+        ),
         2,
     )
 
@@ -595,13 +894,15 @@ def check_coupon(
     )
 
     discount_amount = calculate_best_discount(
-        coupon_discount=coupon_discount_amount,
-        cart_discount=cart_discount_amount,
+        coupon_discount=(
+            coupon_discount_amount
+        ),
+        cart_discount=(
+            cart_discount_amount
+        ),
         subtotal_price=subtotal_price,
     )
 
-    # إذا كان الخصمان متساويين، نستخدم الخصم
-    # التلقائي حتى لا يتم استهلاك الكوبون بدون داعٍ.
     coupon_is_applied = (
         coupon is not None
         and coupon_discount_amount
@@ -656,26 +957,23 @@ def create_order(
         )
 
     try:
-        subtotal_price = 0.0
-        validated_items = []
-
-        for product_id, quantity in quantities.items():
-            product = get_product_for_new_order(
-                db=db,
-                product_id=product_id,
-                quantity=quantity,
-            )
-
-            subtotal_price += (
-                product.price * quantity
-            )
-
-            validated_items.append(
-                (product, quantity)
-            )
+        stock_plan = build_stock_plan(
+            db=db,
+            quantities=quantities,
+            lock=True,
+        )
 
         subtotal_price = round(
-            subtotal_price,
+            sum(
+                (
+                    stock_plan[
+                        "ordered_products"
+                    ][product_id].price
+                    * quantity
+                )
+                for product_id, quantity
+                in quantities.items()
+            ),
             2,
         )
 
@@ -693,11 +991,16 @@ def create_order(
             )
         )
 
-        # تطبيق الخصم الأكبر فقط.
-        discount_amount = calculate_best_discount(
-            coupon_discount=coupon_discount_amount,
-            cart_discount=cart_discount_amount,
-            subtotal_price=subtotal_price,
+        discount_amount = (
+            calculate_best_discount(
+                coupon_discount=(
+                    coupon_discount_amount
+                ),
+                cart_discount=(
+                    cart_discount_amount
+                ),
+                subtotal_price=subtotal_price,
+            )
         )
 
         total_price = round(
@@ -705,11 +1008,6 @@ def create_order(
             2,
         )
 
-        # يتم اعتبار الكوبون مستخدمًا فقط عندما يكون
-        # خصمه أكبر من خصم الـ10% التلقائي.
-        #
-        # في حالة تساوي الخصمين، نستخدم الخصم التلقائي
-        # ولا نستهلك الكوبون.
         applied_coupon = (
             coupon
             if (
@@ -732,7 +1030,9 @@ def create_order(
             address=order.address,
             note=order.note,
             product_id=first_product_id,
-            quantity=sum(quantities.values()),
+            quantity=sum(
+                quantities.values()
+            ),
             subtotal_price=subtotal_price,
             coupon_code=(
                 applied_coupon.code
@@ -751,9 +1051,12 @@ def create_order(
             ),
             discount_amount=discount_amount,
             total_price=total_price,
-            payment_method="Not selected yet",
+            payment_method=(
+                "Not selected yet"
+            ),
             payment_status=(
-                "Waiting for customer payment choice"
+                "Waiting for customer "
+                "payment choice"
             ),
             payment_details="",
             status="pending",
@@ -762,28 +1065,41 @@ def create_order(
         db.add(new_order)
         db.flush()
 
-        for product, quantity in validated_items:
-            product.stock -= quantity
+        deduct_stock_plan(
+            stock_requirements=(
+                stock_plan[
+                    "stock_requirements"
+                ]
+            ),
+            stock_products=(
+                stock_plan[
+                    "stock_products"
+                ]
+            ),
+        )
 
-            if product.stock <= 0:
-                product.stock = 0
-                product.is_active = False
+        for product_id, quantity in (
+            quantities.items()
+        ):
+            product = (
+                stock_plan[
+                    "ordered_products"
+                ][product_id]
+            )
 
-            order_item = OrderItem(
-                order_id=new_order.id,
-                product_id=product.id,
+            add_order_item_with_snapshot(
+                db=db,
+                order=new_order,
+                product=product,
                 quantity=quantity,
                 unit_price=product.price,
-                total_price=round(
-                    product.price * quantity,
-                    2,
+                bundle_components=(
+                    stock_plan[
+                        "bundle_components"
+                    ]
                 ),
             )
 
-            db.add(order_item)
-
-        # زيادة عدد استخدامات الكوبون فقط إذا كان
-        # الكوبون هو الخصم الذي تم تطبيقه فعليًا.
         if applied_coupon:
             applied_coupon.used_count += 1
 
@@ -795,8 +1111,6 @@ def create_order(
         )
 
         if not saved_order:
-            # لا نرجع فشلًا بعد أن تم حفظ الطلب بالفعل.
-            # نستخدم الكائن الموجود في الـSession كحل احتياطي.
             db.refresh(new_order)
             saved_order = new_order
 
@@ -810,8 +1124,6 @@ def create_order(
             )
         )
 
-        # يتم إرسال الإيميلات بعد إعادة الاستجابة للعميل.
-        # فشل Brevo لن يلغي الطلب بعد حفظه في قاعدة البيانات.
         background_tasks.add_task(
             send_order_emails,
             email_snapshot,
@@ -836,7 +1148,10 @@ def get_orders(
         db.query(Order)
         .options(
             joinedload(Order.items)
-            .joinedload(OrderItem.product)
+            .joinedload(OrderItem.product),
+            joinedload(Order.items)
+            .joinedload(OrderItem.components)
+            .joinedload(OrderItemComponent.product),
         )
         .order_by(Order.created_at.desc())
         .all()
@@ -919,7 +1234,9 @@ def update_order_admin(
             replace_order_items(
                 db=db,
                 order=order,
-                requested_items=requested_items,
+                requested_items=(
+                    requested_items
+                ),
             )
 
         db.commit()
@@ -958,22 +1275,16 @@ def delete_order(
 
     try:
         for item in order.items:
-            product = item.product
+            restore_order_item_stock(item)
 
-            if product:
-                product.stock += item.quantity
-
-                if product.stock > 0:
-                    product.is_active = True
-
-        # الطلب لا يحفظ coupon_code إلا إذا كان
-        # الكوبون هو الخصم المطبق فعليًا.
         if order.coupon_code:
             coupon = (
                 db.query(Coupon)
                 .filter(
                     Coupon.code
-                    == order.coupon_code.strip().upper()
+                    == order.coupon_code
+                    .strip()
+                    .upper()
                 )
                 .first()
             )
@@ -990,7 +1301,7 @@ def delete_order(
         return {
             "message": (
                 "Order deleted successfully"
-            )
+            ),
         }
 
     except Exception:
@@ -1044,9 +1355,17 @@ def update_order_payment(
             detail="Order not found",
         )
 
-    order.payment_method = payment.payment_method
-    order.payment_status = payment.payment_status
-    order.payment_details = payment.payment_details
+    order.payment_method = (
+        payment.payment_method
+    )
+
+    order.payment_status = (
+        payment.payment_status
+    )
+
+    order.payment_details = (
+        payment.payment_details
+    )
 
     db.commit()
 
