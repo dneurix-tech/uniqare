@@ -138,7 +138,7 @@ class OrderResponse(BaseModel):
         default_factory=list,
     )
 
-    class Config:
+class Config:
         from_attributes = True
 
 
@@ -177,3 +177,24 @@ class OrderAdminUpdate(BaseModel):
     # When supplied, this list fully replaces
     # the current products in the order.
     items: Optional[list[OrderItemCreate]] = None
+
+class AnnouncementCreate(BaseModel):
+    content: str
+    is_active: bool = True
+
+
+class AnnouncementUpdate(BaseModel):
+    content: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class AnnouncementResponse(BaseModel):
+    id: int
+    content: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+    

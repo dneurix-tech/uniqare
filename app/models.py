@@ -346,3 +346,29 @@ class Review(Base):
         DateTime,
         default=datetime.utcnow,
     )
+
+class Announcement(Base):
+    __tablename__ = "announcements"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    content = Column(
+        Text,
+        nullable=False,
+    )
+
+    is_active = Column(
+        Boolean,
+        default=True,
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )

@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from app.database import engine, Base
-from app.routers import products, orders, coupons, reviews
+from app.routers import products, orders, coupons, reviews, announcements
+    
 
 load_dotenv()
 
@@ -40,7 +41,7 @@ app.include_router(products.router)
 app.include_router(orders.router)
 app.include_router(coupons.router)
 app.include_router(reviews.router)
-
+app.include_router(announcements.router)
 
 @app.get("/")
 def home():
