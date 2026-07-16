@@ -478,6 +478,9 @@ def build_stock_plan(
         list[tuple[int, int]],
     ] = {}
 
+    # Manual remaining quantity for every ordered bundle.
+    bundle_stock_requirements: dict[int, int] = {}
+
     for product_id, order_quantity in (
         quantities.items()
     ):
@@ -495,6 +498,24 @@ def build_stock_plan(
             )
 
         if product.is_bundle:
+            available_bundle_stock = int(
+                product.stock or 0
+            )
+
+            if available_bundle_stock < order_quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Only {available_bundle_stock} "
+                        f"bundle(s) are available "
+                        f"for {product.name}"
+                    ),
+                )
+
+            bundle_stock_requirements[
+                product_id
+            ] = order_quantity
+
             component_rows = (
                 bundle_items_by_bundle.get(
                     product_id,
@@ -634,6 +655,9 @@ def build_stock_plan(
         "bundle_components": (
             bundle_components
         ),
+        "bundle_stock_requirements": (
+            bundle_stock_requirements
+        ),
     }
 
 
@@ -654,16 +678,80 @@ def deduct_stock_plan(
             product.is_active = False
 
 
+def deduct_bundle_stock(
+    bundle_stock_requirements: dict[int, int],
+    ordered_products: dict[int, Product],
+):
+    """
+    Deduct the manually configured remaining bundle quantity.
+
+    Component product stock is deducted separately by
+    deduct_stock_plan().
+    """
+
+    for (
+        bundle_id,
+        required_quantity,
+    ) in bundle_stock_requirements.items():
+        bundle = ordered_products[bundle_id]
+
+        available_stock = int(
+            bundle.stock or 0
+        )
+
+        if available_stock < required_quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Only {available_stock} "
+                    f"bundle(s) are available "
+                    f"for {bundle.name}"
+                ),
+            )
+
+        bundle.stock = (
+            available_stock
+            - required_quantity
+        )
+
+        if bundle.stock <= 0:
+            bundle.stock = 0
+            bundle.is_active = False
+
+
 def restore_order_item_stock(
     item: OrderItem,
 ):
+    """
+    Restore all stock consumed by one order item.
+
+    Bundle order item:
+    - Restore the bundle's manual remaining quantity.
+    - Restore every component product quantity saved in the snapshot.
+
+    Regular product order item:
+    - Restore the product quantity directly.
+    """
+
     if item.components:
+        bundle_product = item.product
+
+        if bundle_product:
+            bundle_product.stock = (
+                int(bundle_product.stock or 0)
+                + int(item.quantity or 0)
+            )
+
+            if bundle_product.stock > 0:
+                bundle_product.is_active = True
+
         for component in item.components:
             product = component.product
 
             if product:
-                product.stock += (
-                    component.quantity
+                product.stock = (
+                    int(product.stock or 0)
+                    + int(component.quantity or 0)
                 )
 
                 if product.stock > 0:
@@ -674,7 +762,10 @@ def restore_order_item_stock(
     product = item.product
 
     if product:
-        product.stock += item.quantity
+        product.stock = (
+            int(product.stock or 0)
+            + int(item.quantity or 0)
+        )
 
         if product.stock > 0:
             product.is_active = True
@@ -767,6 +858,17 @@ def replace_order_items(
         ),
         stock_products=(
             stock_plan["stock_products"]
+        ),
+    )
+
+    deduct_bundle_stock(
+        bundle_stock_requirements=(
+            stock_plan[
+                "bundle_stock_requirements"
+            ]
+        ),
+        ordered_products=(
+            stock_plan["ordered_products"]
         ),
     )
 
@@ -1074,6 +1176,19 @@ def create_order(
             stock_products=(
                 stock_plan[
                     "stock_products"
+                ]
+            ),
+        )
+
+        deduct_bundle_stock(
+            bundle_stock_requirements=(
+                stock_plan[
+                    "bundle_stock_requirements"
+                ]
+            ),
+            ordered_products=(
+                stock_plan[
+                    "ordered_products"
                 ]
             ),
         )

@@ -60,6 +60,8 @@ class BundleItemResponse(BaseModel):
 
 
 class BundleResponse(ProductResponse):
+    configured_stock: int = 0
+    
     images: list[BundleImageResponse] = Field(
         default_factory=list,
     )

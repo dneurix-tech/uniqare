@@ -198,10 +198,25 @@ def get_regular_products(
 def calculate_bundle_stock(
     bundle: Product,
 ) -> int:
+    """
+    العدد المتاح هو الأقل بين:
+
+    1. عدد العروض المتبقية الذي حدده الأدمن.
+    2. عدد العروض التي يمكن تكوينها من مخزون المنتجات.
+    """
+
+    manual_bundle_stock = max(
+        0,
+        int(bundle.stock or 0),
+    )
+
+    if manual_bundle_stock <= 0:
+        return 0
+
     if not bundle.bundle_items:
         return 0
 
-    available_values = []
+    products_capacity = []
 
     for item in bundle.bundle_items:
         child_product = item.child_product
@@ -209,16 +224,22 @@ def calculate_bundle_stock(
         if (
             not child_product
             or child_product.is_active is False
-            or item.quantity <= 0
+            or int(item.quantity or 0) <= 0
         ):
             return 0
 
-        available_values.append(
+        products_capacity.append(
             int(child_product.stock or 0)
             // int(item.quantity)
         )
 
-    return min(available_values) if available_values else 0
+    if not products_capacity:
+        return 0
+
+    return min(
+        manual_bundle_stock,
+        min(products_capacity),
+    )
 
 
 def serialize_bundle(
@@ -275,7 +296,13 @@ def serialize_bundle(
             else bundle.image_url
         ),
         "category": bundle.category,
+
+        # Actual quantity the customer is allowed to buy.
         "stock": available_stock,
+
+        # Remaining bundle quantity configured by the admin.
+        "configured_stock": int(bundle.stock or 0),
+
         "is_active": bool(bundle.is_active),
         "is_bundle": True,
         "images": images,
@@ -465,6 +492,10 @@ def create_bundle(
         float,
         Form(),
     ],
+    stock: Annotated[
+        int,
+        Form(),
+    ],
     items_json: Annotated[
         str,
         Form(),
@@ -502,6 +533,15 @@ def create_bundle(
 ):
     cleaned_name = name.strip()
 
+    if stock <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Available bundle quantity "
+                "must be greater than 0"
+            ),
+        )
+
     if not cleaned_name:
         raise HTTPException(
             status_code=400,
@@ -521,7 +561,7 @@ def create_bundle(
         items_json
     )
 
-    products_by_id = get_regular_products(
+    get_regular_products(
         db=db,
         quantities=quantities,
     )
@@ -543,7 +583,7 @@ def create_bundle(
             old_price=parsed_old_price,
             image_url=first_image_url,
             category=category or "Bundle Offers",
-            stock=0,
+            stock=stock,
             is_active=is_active,
             is_bundle=True,
         )
@@ -571,14 +611,6 @@ def create_bundle(
                     sort_order=index,
                 )
             )
-
-        available_stock = min(
-            int(products_by_id[product_id].stock or 0)
-            // quantity
-            for product_id, quantity in quantities.items()
-        )
-
-        bundle.stock = available_stock
 
         db.commit()
 
@@ -617,6 +649,7 @@ def update_bundle(
     short_description: Optional[str] = Form(None),
     long_description: Optional[str] = Form(None),
     price: Optional[float] = Form(None),
+    stock: Optional[int] = Form(None),
     old_price: Optional[str] = Form(None),
     category: Optional[str] = Form(None),
     is_active: Optional[bool] = Form(None),
@@ -636,6 +669,12 @@ def update_bundle(
         db=db,
         bundle_id=bundle_id,
     )
+
+    if stock is not None and stock < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Bundle quantity cannot be negative",
+        )
 
     if (
         name is not None
@@ -711,6 +750,12 @@ def update_bundle(
         if price is not None:
             bundle.price = price
 
+        if stock is not None:
+            bundle.stock = stock
+
+            if stock <= 0:
+                bundle.is_active = False
+
         if old_price_was_provided:
             bundle.old_price = parsed_old_price
 
@@ -755,15 +800,6 @@ def update_bundle(
             )
 
         db.flush()
-
-        refreshed_bundle = get_bundle_or_404(
-            db=db,
-            bundle_id=bundle_id,
-        )
-
-        bundle.stock = calculate_bundle_stock(
-            refreshed_bundle
-        )
 
         if bundle.images:
             first_image = sorted(
