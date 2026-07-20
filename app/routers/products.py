@@ -157,9 +157,10 @@ def validate_product_prices(
 def get_products(
     db: Session = Depends(get_db),
 ):
+    # Storefront intentionally returns both available and sold-out products.
+    # Product data is public; admin-only operations remain protected.
     return (
         regular_products_query(db)
-        .filter(Product.is_active.is_(True))
         .order_by(Product.id.desc())
         .all()
     )
