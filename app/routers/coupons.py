@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Coupon
 from app.schemas import CouponCreate, CouponResponse, CouponUpdate
+from app.security import require_admin
 
 router = APIRouter(prefix="/coupons", tags=["Coupons"])
 
@@ -46,18 +47,28 @@ def validate_coupon_values(
 
 
 @router.get("/admin/all", response_model=list[CouponResponse])
-def get_admin_coupons(db: Session = Depends(get_db)):
+def get_admin_coupons(
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     return db.query(Coupon).order_by(Coupon.created_at.desc()).all()
 
 
 # Kept for backward compatibility.
 @router.get("/", response_model=list[CouponResponse])
-def get_coupons(db: Session = Depends(get_db)):
+def get_coupons(
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     return db.query(Coupon).order_by(Coupon.created_at.desc()).all()
 
 
 @router.post("/", response_model=CouponResponse)
-def create_coupon(coupon: CouponCreate, db: Session = Depends(get_db)):
+def create_coupon(
+    coupon: CouponCreate,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     code = coupon.code.strip().upper()
 
     if not code:
@@ -97,6 +108,7 @@ def update_coupon(
     coupon_id: int,
     data: CouponUpdate,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     coupon = db.query(Coupon).filter(Coupon.id == coupon_id).first()
 
@@ -166,7 +178,11 @@ def update_coupon(
 
 
 @router.delete("/{coupon_id}")
-def delete_coupon(coupon_id: int, db: Session = Depends(get_db)):
+def delete_coupon(
+    coupon_id: int,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     coupon = db.query(Coupon).filter(Coupon.id == coupon_id).first()
 
     if not coupon:

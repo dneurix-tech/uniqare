@@ -100,14 +100,14 @@ class CouponResponse(CouponCreate):
 
 
 class OrderPaymentUpdate(BaseModel):
-    payment_method: str
-    payment_status: str
-    payment_details: Optional[str] = None
+    payment_method: str = Field(min_length=1, max_length=100)
+    payment_status: str = Field(min_length=1, max_length=150)
+    payment_details: Optional[str] = Field(default=None, max_length=1000)
 
 
 class OrderItemCreate(BaseModel):
-    product_id: int
-    quantity: int = 1
+    product_id: int = Field(ge=1)
+    quantity: int = Field(default=1, ge=1, le=1000)
 
 
 class OrderItemComponentResponse(BaseModel):
@@ -138,14 +138,17 @@ class OrderItemResponse(BaseModel):
 
 
 class OrderCreate(BaseModel):
-    customer_name: str
-    phone: str
+    customer_name: str = Field(min_length=1, max_length=150)
+    phone: str = Field(min_length=1, max_length=30)
     email: EmailStr
-    governorate: str
-    address: str
-    note: Optional[str] = None
-    coupon_code: Optional[str] = None
-    items: list[OrderItemCreate]
+    governorate: str = Field(min_length=1, max_length=100)
+    address: str = Field(min_length=1, max_length=2000)
+    note: Optional[str] = Field(default=None, max_length=2000)
+    coupon_code: Optional[str] = Field(default=None, max_length=50)
+    items: list[OrderItemCreate] = Field(
+        min_length=1,
+        max_length=100,
+    )
 
 
 class OrderResponse(BaseModel):
@@ -183,13 +186,16 @@ class OrderResponse(BaseModel):
 
 
 class CheckCouponItem(BaseModel):
-    product_id: int
-    quantity: int = 1
+    product_id: int = Field(ge=1)
+    quantity: int = Field(default=1, ge=1, le=1000)
 
 
 class CheckCouponRequest(BaseModel):
-    coupon_code: str
-    items: list[CheckCouponItem]
+    coupon_code: str = Field(min_length=1, max_length=50)
+    items: list[CheckCouponItem] = Field(
+        min_length=1,
+        max_length=100,
+    )
 
 
 class CheckCouponResponse(BaseModel):
@@ -218,12 +224,12 @@ class OrderAdminUpdate(BaseModel):
 
 
 class AnnouncementCreate(BaseModel):
-    content: str
+    content: str = Field(min_length=1, max_length=500)
     is_active: bool = True
 
 
 class AnnouncementUpdate(BaseModel):
-    content: Optional[str] = None
+    content: Optional[str] = Field(default=None, max_length=500)
     is_active: Optional[bool] = None
 
 
@@ -236,3 +242,14 @@ class AnnouncementResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AdminLoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=200)
+
+
+class AdminTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int

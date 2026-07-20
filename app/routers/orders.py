@@ -6,6 +6,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     HTTPException,
+    Request,
 )
 from sqlalchemy.orm import Session, joinedload
 
@@ -26,6 +27,12 @@ from app.schemas import (
     OrderPaymentUpdate,
 )
 from app.services.email_service import send_order_emails
+from app.security import (
+    authorize_order_payment,
+    create_order_payment_token,
+    enforce_public_rate_limit,
+    require_admin,
+)
 
 
 router = APIRouter(
@@ -949,8 +956,16 @@ def replace_order_items(
 )
 def check_coupon(
     data: CheckCouponRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    enforce_public_rate_limit(
+        request=request,
+        action="coupon-check",
+        max_requests=300,
+        window_seconds=600,
+    )
+
     quantities = merge_item_quantities(
         data.items
     )
@@ -1046,8 +1061,16 @@ def check_coupon(
 def create_order(
     order: OrderCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    enforce_public_rate_limit(
+        request=request,
+        action="order-create",
+        max_requests=60,
+        window_seconds=600,
+    )
+
     quantities = merge_item_quantities(
         order.items
     )
@@ -1244,7 +1267,12 @@ def create_order(
             email_snapshot,
         )
 
-        return saved_order_data
+        response_data = dict(saved_order_data)
+        response_data["order_token"] = (
+            create_order_payment_token(saved_order.id)
+        )
+
+        return response_data
 
     except HTTPException:
         db.rollback()
@@ -1258,6 +1286,7 @@ def create_order(
 @router.get("/")
 def get_orders(
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     orders = (
         db.query(Order)
@@ -1282,6 +1311,7 @@ def get_orders(
 def get_order(
     order_id: int,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     order = get_order_with_items(
         db=db,
@@ -1302,6 +1332,7 @@ def update_order_admin(
     order_id: int,
     data: OrderAdminUpdate,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     order = get_order_with_items(
         db=db,
@@ -1376,6 +1407,7 @@ def update_order_admin(
 def delete_order(
     order_id: int,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     order = get_order_with_items(
         db=db,
@@ -1429,6 +1461,7 @@ def update_order_status(
     order_id: int,
     status: str,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     order = get_order_with_items(
         db=db,
@@ -1457,8 +1490,30 @@ def update_order_status(
 def update_order_payment(
     order_id: int,
     payment: OrderPaymentUpdate,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    access_type = authorize_order_payment(
+        request=request,
+        order_id=order_id,
+    )
+
+    if access_type == "customer":
+        allowed_customer_payments = {
+            "Cash on Delivery": "Customer will pay on delivery",
+            "InstaPay": "Waiting for transfer screenshot",
+            "Vodafone Cash": "Waiting for transfer screenshot",
+        }
+        expected_status = allowed_customer_payments.get(
+            payment.payment_method
+        )
+
+        if not expected_status or payment.payment_status != expected_status:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid customer payment selection",
+            )
+
     order = get_order_with_items(
         db=db,
         order_id=order_id,

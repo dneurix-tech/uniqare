@@ -13,8 +13,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.image_security import validated_image_stream
 from app.models import BundleItem, Product
 from app.schemas import ProductResponse
+from app.security import require_admin
 
 
 router = APIRouter(
@@ -63,7 +65,7 @@ def upload_image_to_cloudinary(
 
     try:
         upload_result = cloudinary.uploader.upload(
-            image.file,
+            validated_image_stream(image),
             folder="uniqare/products",
             resource_type="image",
         )
@@ -91,9 +93,7 @@ def upload_image_to_cloudinary(
 
         raise HTTPException(
             status_code=500,
-            detail=(
-                f"Image upload failed: {str(error)}"
-            ),
+            detail="Image upload failed",
         )
 
 
@@ -171,6 +171,7 @@ def get_products(
 )
 def get_all_products(
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     return (
         regular_products_query(db)
@@ -194,6 +195,7 @@ def create_product(
     is_active: bool = Form(True),
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     cleaned_name = name.strip()
 
@@ -279,6 +281,7 @@ def update_product(
     is_active: Optional[bool] = Form(None),
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     product = get_regular_product_or_404(
         db=db,
@@ -367,6 +370,7 @@ def update_product(
 def delete_product(
     product_id: int,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     product = get_regular_product_or_404(
         db=db,

@@ -15,6 +15,7 @@ from pydantic import WithJsonSchema
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
+from app.image_security import validated_image_stream
 from app.models import (
     BundleItem,
     OrderItem,
@@ -22,6 +23,7 @@ from app.models import (
     ProductImage,
 )
 from app.schemas import BundleResponse
+from app.security import require_admin
 
 
 router = APIRouter(
@@ -376,7 +378,7 @@ def upload_bundle_images(
                 )
 
             result = cloudinary.uploader.upload(
-                image.file,
+                validated_image_stream(image),
                 folder="uniqare/bundles",
                 resource_type="image",
             )
@@ -450,6 +452,7 @@ def get_public_bundles(
 )
 def get_admin_bundles(
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     bundles = (
         get_bundle_query(db)
@@ -530,6 +533,7 @@ def create_bundle(
         Form(),
     ] = True,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     cleaned_name = name.strip()
 
@@ -664,6 +668,7 @@ def update_bundle(
         ),
     ] = None,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     bundle = get_bundle_or_404(
         db=db,
@@ -843,6 +848,7 @@ def delete_bundle_image(
     bundle_id: int,
     image_id: int,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     bundle = get_bundle_or_404(
         db=db,
@@ -908,6 +914,7 @@ def delete_bundle_image(
 def delete_bundle(
     bundle_id: int,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     bundle = get_bundle_or_404(
         db=db,

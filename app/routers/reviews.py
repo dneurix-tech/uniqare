@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.database import get_db
+from app.image_security import validated_image_stream
 from app.models import Review
+from app.security import require_admin
 
 router = APIRouter(prefix="/reviews", tags=["Reviews"])
 
@@ -37,15 +39,17 @@ def upload_review_image(image: UploadFile):
 
     try:
         upload_result = cloudinary.uploader.upload(
-            image.file,
+            validated_image_stream(image),
             folder="uniqare/reviews",
             resource_type="image"
         )
 
         return upload_result.get("secure_url")
 
-    except Exception as error:
-        print("Cloudinary review upload error:", error)
+    except HTTPException:
+        raise
+
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail="Failed to upload review image"
@@ -65,7 +69,10 @@ def get_public_reviews(db: Session = Depends(get_db)):
 
 
 @router.get("/admin/all")
-def get_admin_reviews(db: Session = Depends(get_db)):
+def get_admin_reviews(
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     reviews = db.query(Review).order_by(desc(Review.created_at)).all()
 
     return [review_to_dict(review) for review in reviews]
@@ -79,6 +86,7 @@ def create_review(
     is_active: bool = Form(True),
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     cleaned_description = description.strip() if description else None
     cleaned_customer_name = customer_name.strip() if customer_name else None
@@ -124,6 +132,7 @@ def update_review(
     is_active: Optional[bool] = Form(None),
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     review = db.query(Review).filter(Review.id == review_id).first()
 
@@ -164,7 +173,11 @@ def update_review(
 
 
 @router.delete("/{review_id}")
-def delete_review(review_id: int, db: Session = Depends(get_db)):
+def delete_review(
+    review_id: int,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     review = db.query(Review).filter(Review.id == review_id).first()
 
     if not review:

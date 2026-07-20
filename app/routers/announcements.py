@@ -8,6 +8,7 @@ from app.schemas import (
     AnnouncementResponse,
     AnnouncementUpdate,
 )
+from app.security import require_admin
 
 
 router = APIRouter(
@@ -39,6 +40,7 @@ def get_active_announcements(
 )
 def get_all_announcements(
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     announcements = (
         db.query(Announcement)
@@ -56,6 +58,7 @@ def get_all_announcements(
 def create_announcement(
     announcement_data: AnnouncementCreate,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     content = announcement_data.content.strip()
 
@@ -85,6 +88,7 @@ def update_announcement(
     announcement_id: int,
     announcement_data: AnnouncementUpdate,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     announcement = (
         db.query(Announcement)
@@ -122,6 +126,7 @@ def update_announcement(
 def delete_announcement(
     announcement_id: int,
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     announcement = (
         db.query(Announcement)
